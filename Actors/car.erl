@@ -1,5 +1,5 @@
 -module(car).
--export([main/2,friendship/2, friendship/3, state/4, state/7, detect/7, getFriends/4]).
+-export([main/2,friendship/2, friendship/3, state/4, state/7, detect/7, getFriends/4, generate_new_goal/5]).
 
     receive_friends(FriendsList, RefList, L, PID_S) ->
         receive
@@ -84,12 +84,12 @@
     state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W, FriendList) ->
         %io:format("Start State~n"),
         receive
-            {updateState, PID_D, X, Y, IsFree} -> 
+            {updateState, X, Y, IsFree} -> 
                 %io:fwrite("Update Value for park (~p,~p), new value: ~p~n", [X,Y, IsFree]), %Update parkings  
                 case {IsFree, dict:fetch({X,Y}, World_Knowledge)==IsFree} of
-                    %If a park becames free, the state actor updates the knowledge of the world
                     %It doesn't update the goal coordinates because this case doesn't affect s
-                    {_,true} -> state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W, FriendList);
+                    {_, true} -> state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W, FriendList);
+                    %If a park becames free, the state actor updates the knowledge of the world
                     {true, false}->
                             World_Knowledge2 = dict:store({X,Y}, IsFree, World_Knowledge),
                             lists:foreach(fun({_, PIDSTATE}) -> PIDSTATE ! {notifyStatus, X, Y, IsFree} end, FriendList),
@@ -101,8 +101,8 @@
                             case {X=:=X_Goal, Y =:= Y_Goal} of
                                 %If the goal is busy, I have to generate a new goal   
                                 {true,true} -> 
-                                    io:fwrite("DISCOVER I HAVE TO CREATE A NEW GOAL: ~p~n", [{X,Y}]),
-                                    {X_Goal_New, Y_Goal_New} = generate_coordinates(H, W), 
+                                    %io:fwrite("DISCOVER I HAVE TO CREATE A NEW GOAL: ~p~n", [{X,Y}]),
+                                    {X_Goal_New, Y_Goal_New} = generate_new_goal(H, W, X_Goal, Y_Goal, World_Knowledge2), 
                                     PID_D ! {updateGoal, X_Goal_New, Y_Goal_New},
                                     state(PID_D, World_Knowledge2, X_Goal_New, Y_Goal_New, H, W,FriendList);
                                 %Else update the knowledge of the world
@@ -113,38 +113,19 @@
 
             %Case Car Exit from the parking and needs new goal
             {askNewGoal, PID_D, Ref} -> 
-                io:format("Ask New Goal with Ref ~p~n",[Ref]),
-                {X_Goal_New, Y_Goal_New} = generate_coordinates(H, W), %TODO: check if new coordinates I generate should be free?
+                %io:format("Ask New Goal with Ref ~p~n",[Ref]),
+                {X_Goal_New, Y_Goal_New} = generate_new_goal(H, W, X_Goal, Y_Goal, World_Knowledge), 
                 PID_D ! {responseNewGoal, X_Goal_New, Y_Goal_New, Ref},
                 state(PID_D, World_Knowledge, X_Goal_New, Y_Goal_New, H, W,FriendList);
             
-            {notifyStatus, X,Y, IsFree} -> 
+            {notifyStatus, X, Y, IsFree} -> 
+                io:format("Send myself a message notify status ~n", []),
+                self() ! {updateState, X, Y, IsFree},
+                state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W,FriendList); %TODO: check if it is correct
                 %io:format("CAR: Notify Status {~p,~p} : ~p ~n", [X,Y,IsFree]),
-                case dict:fetch({X,Y}, World_Knowledge)==IsFree of
-                    true -> 
-                        %Do nothing
-                        state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W,FriendList);
-                    false ->
-                        %World changed, notify to friends
-                        World_Knowledge2 = dict:store({X,Y}, IsFree, World_Knowledge),
-                        lists:foreach(fun({_, PIDSTATE}) -> PIDSTATE ! {notifyStatus, X, Y, IsFree} end, FriendList),
-                        case {X=:=X_Goal, Y =:= Y_Goal} of
-                            %If the goal is busy, I have to generate a new goal   
-                            {true,true} -> 
-                                %io:fwrite("NOTIFIED I HAVE TO CREATE A NEW GOAL: ~p~n", [{X,Y}]),
-                                {X_Goal_New, Y_Goal_New} = generate_coordinates(H, W), 
-                                PID_D ! {updateGoal, X_Goal_New, Y_Goal_New},
-                                state(PID_D, World_Knowledge2, X_Goal_New, Y_Goal_New, H, W,FriendList);
-                            %Else update the knowledge of the world
-                            {_,_} -> 
-                                state(PID_D, World_Knowledge2, X_Goal, Y_Goal, H, W,FriendList)
-                        end 
-                end;
-
-            %TODO: case a friend sends me a new list of friends
+                
             {listModified, NewFriendList} -> 
                 %io:format("Received new list of friends: ~p~n", [NewFriendList]),
-
                 render ! {friends, PID_D, NewFriendList}, %send to render the new list of friends
                 state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W , NewFriendList);
 
@@ -152,21 +133,51 @@
             _ -> state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W,FriendList)
         end.
 
-
+    %%%
+    % Function used to initialize the state actor, receives the PID of the detect actor and starts the real detect actor 
     state(X_Goal, Y_Goal, H, W) -> 
         World_Knowledge = dict:from_list([{{X, Y}, undefined} || X <- lists:seq(0, H-1), Y <- lists:seq(0, W-1)]), 
         receive
             {pidDetect, PID_D} ->
+                link(PID_D),
                 state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W, [])
         end.
 
 
+    %%%
+    % Function used to generate random coordinates for the new goal, checks that the coordinates should be different from the old ones 
+    % and that the cell is free 
+    % @param H: Height of the world
+    % @param W: Width of the world
+    % @param Old_X: X coordinate of the old goal
+    % @param Old_Y: Y coordinate of the old goal
+    % @param World_Knowledge: Knowledge of the world
+    % @return {X_Goal_New, Y_Goal_New}: New coordinates of the goal
+    generate_new_goal(H, W, Old_X, Old_Y, World_Knowledge) ->
+        {X_Goal_New, Y_Goal_New} = generate_coordinates(H, W),
+        %If the coordinates I generate are free and are different from old ones I return them
+        case dict:fetch({X_Goal_New, Y_Goal_New}, World_Knowledge) of
+            %It's impossible to get an error because the dict is initialized with all the cells
+            error -> exit(self(), "Error in generate new Goal");     
+            false -> generate_new_goal(H, W, Old_X, Old_Y, World_Knowledge);
+            %case true & undefined 
+            _ -> 
+                case {X_Goal_New =:= Old_X, Y_Goal_New =:= Old_Y} of
+                    {true, true} -> generate_new_goal(H, W, Old_X, Old_Y, World_Knowledge);
+                    {_,_} -> {X_Goal_New, Y_Goal_New}
+                end
+        end.
+
+
+    %%%%
+    % @param H: height of the chessboard
+    % @param W: width of the chessboard
+    % @return: a tuple {X,Y} with X and Y coordinates 
     generate_coordinates(H, W) ->
         X = rand:uniform(H)-1,
         Y = rand:uniform(W)-1,
         {X, Y}.
 
-%L'attore "detect" di un'automobile sceglie un posteggio obiettivo libero interagendo con l'attore "state". Dopodichè, ogni 2s, si avvicina di una cella verso tale obiettivo. Se deve muoversi lungo entrambi gli assi (x e y), lo fa scegliendo randomicamente l'asse e muovendosi nella direzione che minimizza la distanza percorsa.
     
     %%%%
     % @param X:  actual X coordinate of the car
@@ -238,7 +249,6 @@
         timer:sleep(2000),
         {X_New, Y_New} = move(X, Y, {X_Goal, Y_Goal}, H, W), %TODO: H and W must be passed as parameters? 
         render ! {position, self(), X_New, Y_New},
-        timer:sleep(5000), %TODO: just for debug()
         Ref = make_ref(),
         %io:format("Ref ~p~n", [Ref]),
         ambient ! {isFree, self(), X_New, Y_New, Ref},
@@ -247,7 +257,7 @@
             {updateGoal, X_Goal_New, Y_Goal_New} ->  detect(X_New, Y_New, X_Goal_New, Y_Goal_New, H, W, PID_S);
             {status, Ref, IsFree} -> 
                 %io:format("Received status ~p with Ref ~p~n", [IsFree, Ref]),
-                PID_S ! {updateState, self(), X_New, Y_New, IsFree},
+                PID_S ! {updateState, X_New, Y_New, IsFree},
                 case {X_New =:= X_Goal, Y_New =:= Y_Goal} of
                     {true, true} ->
                         Park_Ref = make_ref(),
@@ -257,15 +267,16 @@
                         PID_S ! {askNewGoal, self(), Park_Ref},
                         receive
                             {responseNewGoal, X_Goal_New, Y_Goal_New, Park_Ref} ->
-                                io:format("Received new goal (~p, ~p) with Ref: ~p~n", [X_Goal_New, Y_Goal_New, Park_Ref]),
+                                %io:format("Received new goal (~p, ~p) with Ref: ~p~n", [X_Goal_New, Y_Goal_New, Park_Ref]),
                                 render ! {target, self(), X_Goal_New, Y_Goal_New},
-                                detect(X_New, Y_New, X_Goal_New, Y_Goal_New, H, W, PID_S);
-                            Msg -> io:fwrite("MSG: ~p~n",[Msg]) %TODO: Kill process?
+                                detect(X_New, Y_New, X_Goal_New, Y_Goal_New, H, W, PID_S)
+                            %Msg -> io:fwrite("MSG: ~p~n",[Msg]) %TODO: Kill process?
                         end;
+                    %If not in  goal
                     _ -> detect(X_New, Y_New, X_Goal, Y_Goal, H, W, PID_S)
                 
                 end; 
-            X -> io:fwrite("~p~n",[X]) %TODO: Kill process?
+            _ -> io:format("D: ~p NO PATTERN MATCHING FOUND~n", [self()])
         end.
 
     %The main actor creates other actors and re-creates them if they fail
@@ -273,7 +284,6 @@
         process_flag(trap_exit, true), 
         %io:format("X_Spawn: ~p, Y_Spawn: ~p~n", [X_Spawn, Y_Spawn]),
         %io:format("X_Goal: ~p, Y_Goal: ~p~n", [X_Goal, Y_Goal]),
-
         Spawn_loop = fun Spawn_loop() ->
             
             {X_Spawn, Y_Spawn} = generate_coordinates(H, W),
