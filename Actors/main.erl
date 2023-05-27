@@ -13,7 +13,7 @@ kill_spawn_loop(CarList, H, W) ->
     N_Cars = rand:uniform(4),
     NewList =  kill_loop(N_Cars, CarList),
     NewList2 = spawn_loop(N_Cars, NewList, H, W),
-    timer:sleep(10000),
+    timer:sleep(15000),
     kill_spawn_loop(NewList2, H, W).
 
 %%%%%
@@ -33,7 +33,7 @@ spawn_loop(N_Cars_to_Spawn, CarList, H, W) ->
             {PID_M, Ref_monitor} = spawn_monitor(car, main, [H,W]),  
             io:format("MAIN: Spawned car with PID: ~p~n", [PID_M]),
             CarList2 = lists:append(CarList, [PID_M]),
-            timer:sleep(5000),
+            timer:sleep(8000),
             render ! {print},
             spawn_loop(N_Cars_to_Spawn-1, CarList2, H, W);
         false ->

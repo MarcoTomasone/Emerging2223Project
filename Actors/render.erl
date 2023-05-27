@@ -1,5 +1,4 @@
-%Render actors represent the ambient at the moment of the request. They are used to show the current state of the ambient to the user.
-%Show in ASCII ART the ambient
+%Render actors represent the ambient at the moment of the request. They are used to show the current state of the ambient to the user.%Show in ASCII ART the ambient
 
 % Path: Actors\render.erl
 -module(render).
@@ -31,6 +30,12 @@ print_chessboard([{X,Y}|T], DictToList) ->
 print_chessboard([],_)-> io:format("\n").
 
 
+get_friends_id(IdFriendsList, [], _) -> IdFriendsList;
+get_friends_id(IdFriendsList, [{PID_F, PID_S}|T], Dict) ->
+    case dict:find(PID_S, Dict) of 
+        {ok, {_,_,_, Id}} -> get_friends_id(IdFriendsList ++ [Id], T, Dict);
+        error -> get_friends_id(IdFriendsList, T, Dict)
+    end.
 
 render(Chessboard, Dict, N) ->
     % PID -> {{POS},{GOAL}, int}     DICT STRUCTURE
@@ -38,9 +43,9 @@ render(Chessboard, Dict, N) ->
         {print} ->
             %Transform the dict to a list and flatten it using map
             DictToList = dict:to_list(Dict),
-            DictToList2 = lists:map(fun({A, {B,C,D,E}}) -> io:format("R: Car ~p with PID ~p is Friend with ~p~n", [E,A,D]), {A,B,C,D,E} end, DictToList),
-            
+            DictToList2 = lists:map(fun({PID_S, {Pos, Goal, FriendList, Id}}) -> io:format("RENDER: Car N_~p is friend with ~p~n", [Id, FriendList]) , {PID_S,Pos,Goal,FriendList,Id} end, DictToList),
             print_chessboard(Chessboard, DictToList2),
+            io:format("~n"),
             render(Chessboard, Dict, N);
         % position of car sent by detect
         {position, PID, X, Y} -> 
@@ -74,27 +79,31 @@ render(Chessboard, Dict, N) ->
         %Sent by ambient when car park or restart
         {parked, PID, X, Y, IsParked} -> 
             {_,_,_, Num} = dict:fetch(PID, Dict),
-            io:format("RENDER: Car N_~p with PID ~p is parked at (~p, ~p): ~p~n", [Num, PID, X, Y, IsParked]),
-            self() ! {print},
+            %We renderize every X seconds, so we don't want to miss some parkings
+            case IsParked of 
+                true -> io:format("RENDER: Car N_~p with PID: ~p is parked in [~p,~p]~n", [Num, PID, X, Y]);
+                false -> io:format("RENDER: Car N_~p with PID: ~p is exited from [~p,~p]~n", [Num, PID, X, Y])
+            end,
             render(Chessboard, Dict, N);
         
         %sent by friendship actor  
         {friends, PID, PIDLIST} -> 
+            IdList = get_friends_id([], PIDLIST, Dict),
             case dict:find(PID, Dict) of 
                 error -> 
                     %If it is not in the dict, it is a new car create it with undefined position and goal
-                    Dict2 = dict:store(PID, {{undefined, undefined}, {undefined, undefined}, PIDLIST, N}, Dict),
+                    Dict2 = dict:store(PID, {{undefined, undefined}, {undefined, undefined}, IdList, N}, Dict),
                     monitor(process, PID),
                     render(Chessboard, Dict2, N+1);
 
                 {ok, {{X_Pos, Y_Pos}, {X_Goal, Y_Goal}, _, ID}} ->
-                    Dict2 = dict:store(PID, {{X_Pos, Y_Pos},{X_Goal,Y_Goal}, PIDLIST ,ID}, Dict),
+                    Dict2 = dict:store(PID, {{X_Pos, Y_Pos},{X_Goal,Y_Goal}, IdList ,ID}, Dict),
                     %io:format("RENDER: Car N_~p with PID: ~p is friend with ~p~n", [ID, PID, PIDLIST]),
                     render(Chessboard, Dict2, N)
             end;
         {'DOWN', _, _, PID, Reason } ->
                     {_,_,_, Num} = dict:fetch(PID, Dict),
-                    io:format("RENDER: Died PID: ~p with N_~p, Reason: ~p~n", [PID, Num, Reason]),
+                    %io:format("RENDER: Died PID: ~p with N_~p, Reason: ~p~n", [PID, Num, Reason]),
                     %remove from dict
                     Dict2 = dict:erase(PID, Dict),
                     render(Chessboard, Dict2, N)

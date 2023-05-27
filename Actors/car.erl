@@ -1,24 +1,47 @@
 -module(car).
 -export([main/2,friendship/2, friendship/3, state/4, state/7, detect/7, getFriends/4, generate_new_goal/5]).
 
-    receive_friends(FriendsList, RefList, L, PID_S) ->
+
+    get_5_alive_friends(TotalFriends, PidList, RefList,  N) ->
+        %take a random friend from the list, if the pid is alive monitor it and add it to ref list
+        case {N, length(TotalFriends)} of
+            {_, 0} -> {PidList, RefList};
+            {0, _} -> {PidList, RefList};
+            {_, _} -> 
+                {PIDF, PIDS} = lists:nth(rand:uniform(length(TotalFriends)), TotalFriends),
+                case is_process_alive(PIDF) of
+                    true -> 
+                        Ref = monitor(process, PIDF),
+                        get_5_alive_friends(lists:delete({PIDF, PIDS}, TotalFriends), [{PIDF,PIDS} | PidList] , [Ref | RefList], N-1);
+                    false -> 
+                        %io:format("FRI: I'm ~p I'm not alive anymore~n", [PIDF]),
+                        get_5_alive_friends(lists:delete({PIDF, PIDS}, TotalFriends), PidList, RefList, N)
+                end
+        end.
+
+
+    receive_friends(FriendsList, RefList, L, PID_S, Ref) ->
         receive
             {myFriends, PIDSLIST, Ref} ->
+                %io:format("FRI: I'm ~p I received a list of friends ~p~n", [self(), PIDSLIST]),
                 %Demonitor the old friends from refList
                 lists:foreach(fun(X) -> demonitor(X) end, RefList),
                 %Add the new friends to the list
                 TotalFriends = lists:usort(PIDSLIST ++ FriendsList),
-                %Create a list choosing 5 random friends from TotalFriends
-                FriendList2 = lists:sublist([Y||{_,Y} <- lists:sort([ {rand:uniform(), N} || N <- TotalFriends])], 5),
-                %Monitor all the friends in the list and save the ref in RefList
-                RefList2 = lists:map(fun({PIDF, _}) -> monitor(process, PIDF) end, FriendList2),
-                %io:format("FRI: I'm ~p my friends are:~p~n ", [self(), FriendList2]),
+                %Create a list choosing 5 random friends from TotalFriends and monitor all the friends in the list and save the ref in RefList
+                {FriendList2, RefList2} = get_5_alive_friends(TotalFriends, [], [], 5),
+                %io:format("FRI: I'm ~p my friends are:~p~n ", [RefList2, FriendList2]),
                 
                 PID_S ! {listModified, FriendList2},
                 timer:sleep(5000),
                 case length(FriendList2) < 5 of
                     true -> getFriends(FriendList2, RefList2, L, PID_S);
                     false -> {FriendList2, RefList2}
+                end
+        after 5000 -> 
+            case length(FriendsList) < 5 of
+                    true -> getFriends(FriendsList, RefList, L, PID_S);
+                    false -> {FriendsList, RefList}
                 end
         end.
         
@@ -30,18 +53,18 @@
             0 -> 
                 Ref = make_ref(),
                 wellknown ! {getFriends, self(), PID_S, Ref},
-                receive_friends(FriendsList, RefList, L, PID_S);
+                receive_friends(FriendsList, RefList, L, PID_S, Ref);
             5 -> 
                 {FriendsList, RefList};
             _ -> 
                 %pick a random friend from the list
                 {PIDF, _} = lists:nth(rand:uniform(Lenght), L),
                 %delete the friend from the list
-                io:format("FRI: I'm ~p I'm sending getFriends to ~p~n", [self(), PIDF]),
+                %io:format("FRI: I'm ~p I'm asking friends to ~p~n", [self(), PIDF]),
                 L2 = [ {PIDFR, PIDSTATE} || {PIDFR, PIDSTATE} <- L, PIDFR =/= PIDF],
                 Ref = make_ref(),
                 PIDF ! {getFriends, self(), PID_S, Ref},
-                receive_friends(FriendsList, RefList, L2, PID_S)
+                receive_friends(FriendsList, RefList, L2, PID_S, Ref)
         end.
         
     friendship(FriendsList, RefList, PID_S) ->
@@ -56,7 +79,7 @@
                         friendship(FriendsList, RefList, PID_S);
                     %case a friend dies
                     {'DOWN', _, _, PID, Reason } ->
-                        %io:format("FRI: Died PID: ~p, Reason: ~p~n", [PID, Reason]),
+                        io:format("FRI: Died PID: ~p, Reason: ~p~n", [PID, Reason]),
                         %delete the friend from the list
                         L2 = [ {PIDFR, PIDSTATE} || {PIDFR, PIDSTATE} <- FriendsList, PIDFR =/= PID],
                         friendship(L2, RefList, PID_S)
@@ -125,7 +148,7 @@
                 
             {listModified, NewFriendList} -> 
                 %io:format("Received new list of friends: ~p~n", [ NewFriendList]),
-                render ! {friends, PID_D, NewFriendList}, %send to render the new list of friends
+                render ! {friends, self(), NewFriendList}, %send to render the new list of friends
                 state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W , NewFriendList);
 
             %Default 
@@ -247,13 +270,13 @@
         %io:format("Start Detect with goal (~p,~p)~n", [X_Goal, Y_Goal]),
         timer:sleep(2000),
         {X_New, Y_New} = move(X, Y, {X_Goal, Y_Goal}, H, W),  
-        render ! {position, self(), X_New, Y_New},
+        render ! {position, PID_S, X_New, Y_New},
         Ref = make_ref(),
         %io:format("Ref ~p~n", [Ref]),
         ambient ! {isFree, self(), X_New, Y_New, Ref},
         receive 
             {updateGoal, X_Goal_New, Y_Goal_New} ->  
-                render ! {target, self(), X_Goal_New, Y_Goal_New},
+                render ! {target, PID_S, X_Goal_New, Y_Goal_New},
                 %Handle the message from the ambient actor
                 receive 
                     {status, Ref, IsFree} ->  
@@ -266,14 +289,14 @@
                 case {X_New =:= X_Goal, Y_New =:= Y_Goal, IsFree} of
                     {true, true, true} ->
                         Park_Ref = make_ref(),
-                        ambient ! {park, self(), X_New, Y_New, Park_Ref},
+                        ambient ! {park, PID_S, X_New, Y_New, Park_Ref},
                         timer:sleep(rand:uniform(5)*1000),
-                        ambient ! {leave, self(), Park_Ref},
+                        ambient ! {leave, PID_S, Park_Ref},
                         PID_S ! {askNewGoal, self(), Park_Ref},
                         receive
                             {responseNewGoal, X_Goal_New, Y_Goal_New, Park_Ref} ->
                                 %io:format("Received new goal (~p, ~p) with Ref: ~p~n", [X_Goal_New, Y_Goal_New, Park_Ref]),
-                                render ! {target, self(), X_Goal_New, Y_Goal_New},
+                                render ! {target, PID_S, X_Goal_New, Y_Goal_New},
                                 detect(X_New, Y_New, X_Goal_New, Y_Goal_New, H, W, PID_S)
                         end;
                     %If not in  goal
@@ -295,8 +318,8 @@
             PID_D = spawn_link(?MODULE, detect, [X_Spawn, Y_Spawn, X_Goal, Y_Goal, H, W, PID_S]),
             PID_S ! {pidDetect, PID_D},
             PID_F  = spawn(?MODULE, friendship, [PID_S, PID_D]),
-            render ! {target, PID_D, X_Goal, Y_Goal},
-            render ! {position, PID_D, X_Spawn, Y_Spawn},
+            render ! {target, PID_S, X_Goal, Y_Goal},
+            render ! {position, PID_S, X_Spawn, Y_Spawn},
             receive
                 {'EXIT', PID, Reason } ->
                     io:format("Died PID: ~p, Reason: ~p~n", [PID, Reason]),
