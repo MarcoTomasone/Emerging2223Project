@@ -75,6 +75,7 @@ render(Chessboard, Dict, N) ->
         {parked, PID, X, Y, IsParked} -> 
             {_,_,_, Num} = dict:fetch(PID, Dict),
             io:format("RENDER: Car N_~p with PID ~p is parked at (~p, ~p): ~p~n", [Num, PID, X, Y, IsParked]),
+            self() ! {print},
             render(Chessboard, Dict, N);
         
         %sent by friendship actor  

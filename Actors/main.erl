@@ -62,8 +62,8 @@ kill_loop(N_Cars_to_Kill, CarList) ->
 
 
 main() ->
-    H = 4,
-    W = 4,
+    H = 10,
+    W = 10,
     Chessboard = dict:from_list([{{X, Y}, undefined} || X <- lists:seq(0, H-1), Y <- lists:seq(0, W-1)]),
     PID_A = ambient:main(Chessboard), %spawn the ambient actor
     PID_W = wellknown:main(),

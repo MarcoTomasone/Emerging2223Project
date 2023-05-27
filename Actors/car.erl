@@ -46,7 +46,6 @@
         
     friendship(FriendsList, RefList, PID_S) ->
         %io:format("FRI: start friendship with PID: ~p~n", [self()]),
-        
         case length(FriendsList) of 
             5 ->
                 %io:format("FRI: I'm ~p I have 5 friends:~p~n ", [self(), FriendsList]),
@@ -57,7 +56,7 @@
                         friendship(FriendsList, RefList, PID_S);
                     %case a friend dies
                     {'DOWN', _, _, PID, Reason } ->
-                        io:format("FRI: Died PID: ~p, Reason: ~p~n", [PID, Reason]),
+                        %io:format("FRI: Died PID: ~p, Reason: ~p~n", [PID, Reason]),
                         %delete the friend from the list
                         L2 = [ {PIDFR, PIDSTATE} || {PIDFR, PIDSTATE} <- FriendsList, PIDFR =/= PID],
                         friendship(L2, RefList, PID_S)
@@ -82,7 +81,7 @@
 
 
     state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W, FriendList) ->
-        %io:format("Start State~n"),
+        %io:format("Start State ~p~n", [self()]),
         receive
             {updateState, X, Y, IsFree} -> 
                 %io:fwrite("Update Value for park (~p,~p), new value: ~p~n", [X,Y, IsFree]), %Update parkings  
@@ -101,7 +100,7 @@
                             case {X=:=X_Goal, Y =:= Y_Goal} of
                                 %If the goal is busy, I have to generate a new goal   
                                 {true,true} -> 
-                                    %io:fwrite("DISCOVER I HAVE TO CREATE A NEW GOAL: ~p~n", [{X,Y}]),
+                                    %io:fwrite("DISCOVER I HAVE TO CREATE A NEW GOAL: ~p~n", [PID_D]),
                                     {X_Goal_New, Y_Goal_New} = generate_new_goal(H, W, X_Goal, Y_Goal, World_Knowledge2), 
                                     PID_D ! {updateGoal, X_Goal_New, Y_Goal_New},
                                     state(PID_D, World_Knowledge2, X_Goal_New, Y_Goal_New, H, W,FriendList);
@@ -119,13 +118,13 @@
                 state(PID_D, World_Knowledge, X_Goal_New, Y_Goal_New, H, W,FriendList);
             
             {notifyStatus, X, Y, IsFree} -> 
-                io:format("Send myself a message notify status ~n", []),
+                %io:format("Send myself a message notify status ~p~n", [self()]),
                 self() ! {updateState, X, Y, IsFree},
-                state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W,FriendList); %TODO: check if it is correct
+                state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W,FriendList);
                 %io:format("CAR: Notify Status {~p,~p} : ~p ~n", [X,Y,IsFree]),
                 
             {listModified, NewFriendList} -> 
-                %io:format("Received new list of friends: ~p~n", [NewFriendList]),
+                %io:format("Received new list of friends: ~p~n", [ NewFriendList]),
                 render ! {friends, PID_D, NewFriendList}, %send to render the new list of friends
                 state(PID_D, World_Knowledge, X_Goal, Y_Goal, H, W , NewFriendList);
 
@@ -247,19 +246,25 @@
     detect(X, Y, X_Goal, Y_Goal, H, W, PID_S) ->
         %io:format("Start Detect with goal (~p,~p)~n", [X_Goal, Y_Goal]),
         timer:sleep(2000),
-        {X_New, Y_New} = move(X, Y, {X_Goal, Y_Goal}, H, W), %TODO: H and W must be passed as parameters? 
+        {X_New, Y_New} = move(X, Y, {X_Goal, Y_Goal}, H, W),  
         render ! {position, self(), X_New, Y_New},
         Ref = make_ref(),
         %io:format("Ref ~p~n", [Ref]),
         ambient ! {isFree, self(), X_New, Y_New, Ref},
-        %io:format("I'm here ~p~n",[self()]),
         receive 
-            {updateGoal, X_Goal_New, Y_Goal_New} ->  detect(X_New, Y_New, X_Goal_New, Y_Goal_New, H, W, PID_S);
+            {updateGoal, X_Goal_New, Y_Goal_New} ->  
+                render ! {target, self(), X_Goal_New, Y_Goal_New},
+                %Handle the message from the ambient actor
+                receive 
+                    {status, Ref, IsFree} ->  
+                        PID_S ! {updateState, X_New, Y_New, IsFree},
+                        detect(X_New, Y_New, X_Goal_New, Y_Goal_New, H, W, PID_S)
+                end;             
             {status, Ref, IsFree} -> 
                 %io:format("Received status ~p with Ref ~p~n", [IsFree, Ref]),
                 PID_S ! {updateState, X_New, Y_New, IsFree},
-                case {X_New =:= X_Goal, Y_New =:= Y_Goal} of
-                    {true, true} ->
+                case {X_New =:= X_Goal, Y_New =:= Y_Goal, IsFree} of
+                    {true, true, true} ->
                         Park_Ref = make_ref(),
                         ambient ! {park, self(), X_New, Y_New, Park_Ref},
                         timer:sleep(rand:uniform(5)*1000),
@@ -270,13 +275,11 @@
                                 %io:format("Received new goal (~p, ~p) with Ref: ~p~n", [X_Goal_New, Y_Goal_New, Park_Ref]),
                                 render ! {target, self(), X_Goal_New, Y_Goal_New},
                                 detect(X_New, Y_New, X_Goal_New, Y_Goal_New, H, W, PID_S)
-                            %Msg -> io:fwrite("MSG: ~p~n",[Msg]) %TODO: Kill process?
                         end;
                     %If not in  goal
-                    _ -> detect(X_New, Y_New, X_Goal, Y_Goal, H, W, PID_S)
-                
+                    _ -> detect(X_New, Y_New, X_Goal, Y_Goal, H, W, PID_S) 
                 end; 
-            _ -> io:format("D: ~p NO PATTERN MATCHING FOUND~n", [self()])
+            MSG -> io:format("D: ~p NO PATTERN MATCHING FOUND ~p~n", [self(), MSG])
         end.
 
     %The main actor creates other actors and re-creates them if they fail
@@ -297,7 +300,8 @@
             receive
                 {'EXIT', PID, Reason } ->
                     io:format("Died PID: ~p, Reason: ~p~n", [PID, Reason]),
-                    Spawn_loop()  
+                    Spawn_loop();
+                X -> io:format("DIED ~p~n", [X])
             end
         end,
         Spawn_loop().
