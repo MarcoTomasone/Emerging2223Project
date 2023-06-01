@@ -41,7 +41,12 @@
 						ambient(Chessboard, RefDict)
 				end;
 			{'DOWN', _, _, PID, _} ->
-				ambient(Chessboard, dict:erase(PID, RefDict));
+				case searchKey(Chessboard, PID) of
+					{X, Y} -> 
+						ambient(dict:store({X,Y}, undefined, Chessboard), dict:erase(PID, RefDict));
+					[] -> 
+						ambient(Chessboard, dict:erase(PID, RefDict))
+				end;
 			
 			_ -> io:fwrite("AMB: No Pattern Matching Found!\n")
 		end.

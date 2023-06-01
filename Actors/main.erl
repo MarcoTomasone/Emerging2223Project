@@ -30,7 +30,7 @@ kill_spawn_loop(CarList, H, W) ->
 spawn_loop(N_Cars_to_Spawn, CarList, H, W) ->
     case N_Cars_to_Spawn > 0 of
         true ->
-            {PID_M, Ref_monitor} = spawn_monitor(car, main, [H,W]),  
+            PID_M = spawn(car, main, [H,W]),  
             io:format("MAIN: Spawned car with PID: ~p~n", [PID_M]),
             CarList2 = lists:append(CarList, [PID_M]),
             timer:sleep(8000),
@@ -68,7 +68,7 @@ main() ->
     PID_A = ambient:main(Chessboard), %spawn the ambient actor
     PID_W = wellknown:main(),
     PID_R = render:main([{X, Y} || X <- lists:seq(0, H-1), Y <- lists:seq(0, W-1)], dict:new()),
-    List = spawn_loop(10, [], H, W),
+    List = spawn_loop(5, [], H, W),
     kill_spawn_loop(List, H, W).
     
                 

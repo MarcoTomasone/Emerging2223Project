@@ -25,7 +25,7 @@ wellknown(PIDSLIST) ->
             end;
         %Case a PID I monitor dies
         {'DOWN', _, _, PID_Friendship, _Reason} ->
-           %io:format("WK: Delete PID: ~p for reason: ~p~n", [PID_Friendship, _Reason]),
+           io:format("WK: Delete PID: ~p for reason: ~p~n", [PID_Friendship, _Reason]),
            %Create a new list that contains all elements form PIDSLIST except the one that died
            UpdatedList = [ {PIDF, PIDS} || {PIDF, PIDS} <- PIDSLIST, PIDF =/= PID_Friendship],
            wellknown(UpdatedList)

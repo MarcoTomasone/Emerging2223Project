@@ -33,7 +33,6 @@
                 %io:format("FRI: I'm ~p my friends are:~p~n ", [RefList2, FriendList2]),
                 
                 PID_S ! {listModified, FriendList2},
-                timer:sleep(5000),
                 case length(FriendList2) < 5 of
                     true -> getFriends(FriendList2, RefList2, L, PID_S);
                     false -> {FriendList2, RefList2}
@@ -42,7 +41,7 @@
             case length(FriendsList) < 5 of
                     true -> getFriends(FriendsList, RefList, L, PID_S);
                     false -> {FriendsList, RefList}
-                end
+            end
         end.
         
 
